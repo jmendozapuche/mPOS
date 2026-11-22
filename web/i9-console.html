@@ -75,6 +75,8 @@
         <input id="keyidx" type="number" min="0" max="98" value="0" style="width:70px"></label>
       <label>Control (1F02)
         <input id="ctrl" value="10633630" style="width:110px"></label>
+      <label>TLV EMV extra (1F09)
+        <input id="extra" value="33" style="width:150px" title="Valor de 1F09. La app de ejemplo envía 33. Puede probar con tags EMV, p. ej. 5F2A02xxxx9F1A02xxxx"></label>
       <label>Espera (s)
         <input id="timeout" type="number" min="5" max="120" value="60" style="width:70px"></label>
     </div>
@@ -83,6 +85,8 @@
       <button data-cmd="cancel" class="sec" disabled>Cancelar</button>
       <button id="btnCopy" class="sec" disabled>Copiar JSON para el switch</button>
     </div>
+    <label style="flex-direction:row;align-items:center;gap:6px;margin-top:10px">
+      <input type="checkbox" id="showSensitive"> Mostrar datos sensibles sin enmascarar (solo con tarjetas de prueba)</label>
     <div id="txState" style="margin-top:8px;color:var(--mut)"></div>
     <div id="result"></div>
   </section>
@@ -111,7 +115,7 @@ const CH_WRITE  = '49535343-8841-43f4-a8d4-ecbe34729bb3'; // teléfono -> termin
 
 const ERRORS = {0x00:'Éxito',0x01:'Tiempo agotado',0x0A:'Cancelado por el usuario',0x72:'Error en datos de pista',0x73:'No se obtuvo vencimiento',0x74:'Error en campo 55',0x80:'Comando recibido',0x81:'Error al decodificar pista',0x82:'Falló el deslizado',0x83:'Tarjeta leída',0x84:'Tarjeta chip insertada',0x85:'Tarjeta chip retirada',0x86:'Falló lectura de chip',0x89:'Retire la tarjeta NFC',0x8A:'Tarjeta NFC detectada',0x8B:'Falló lectura NFC',0x8C:'Use otro medio',0x8D:'Sin servicio',0x8E:'Tarjeta rechazó la transacción',0x8F:'Use tarjeta NFC',0x90:'Falló reset del chip',0x94:'Falló handshake TLS',0x9E:'Transacción restringida',0xD4:'Error de tarjeta NFC',0xD7:'Presente una tarjeta',0xEA:'Terminal bloqueado',0xF0:'Encabezado no soportado',0xF1:'Comando primario no soportado',0xF2:'Comando secundario no soportado',0xF3:'Comando no soportado',0xF7:'Longitud de datos incorrecta',0xFC:'Datos incorrectos',0xFD:'ID de terminal incorrecto',0xFF:'Error de checksum'};
 
-const RESP_TAGS = {'1F40':'Pista en claro','1F41':'Tipo de tarjeta','1F42':'Modo de control','1F44':'ID de terminal','1F45':'TUSN','1F46':'Resultado','1F47':'PIN cifrado','1F48':'Datos IC/NFC','1F4A':'Aleatorio del terminal','1F4B':'Saldo e-cash','1F4C':'MAC','1F4E':'Vencimiento','1F4F':'Long. cifrada de pistas','1F50':'Long. original de pistas','1F52':'Número de secuencia (PAN seq)','1F53':'CVM','1F54':'Motivo de rechazo'};
+const RESP_TAGS = {'1F40':'Pista en claro','1F41':'Tipo de tarjeta','1F42':'Modo de control','1F44':'ID de terminal','1F45':'TUSN','1F46':'Resultado','1F47':'PIN cifrado','1F48':'Datos IC/NFC','1F4A':'Aleatorio del terminal','1F4B':'Saldo e-cash','1F4C':'MAC','1F4E':'Vencimiento','1F4F':'Long. cifrada de pistas','1F50':'Long. original de pistas','1F52':'Número de secuencia (PAN seq)','1F53':'CVM','1F54':'Motivo de rechazo','1F51':'PAN (ASCII)','1F55':'Titular','1F61':'Dato 1F61 (sin documentar)'};
 
 const EMV_TAGS = {'4F':'AID','50':'Etiqueta de aplicación','57':'Track 2 equivalente','5A':'PAN','5F20':'Titular','5F24':'Vencimiento','5F25':'Fecha efectiva','5F2A':'Moneda transacción','5F34':'PAN seq','82':'AIP','84':'DF Name','8A':'Código de respuesta','91':'Datos auth emisor','95':'TVR','9A':'Fecha transacción','9B':'TSI','9C':'Tipo transacción','9F02':'Monto autorizado','9F03':'Otro monto','9F06':'AID terminal','9F09':'Versión app','9F10':'IAD','9F1A':'País terminal','9F1E':'Serie IFD','9F26':'ARQC / criptograma','9F27':'CID','9F33':'Capacidades terminal','9F34':'Resultado CVM','9F35':'Tipo terminal','9F36':'ATC','9F37':'Número impredecible','9F41':'Contador de secuencia','9F53':'Categoría transacción','9F6E':'Form factor','DF02':'KSN (prop.)','DF03':'Datos cifrados (prop.)','C0':'KSN (prop.)','C2':'Datos cifrados (prop.)'};
 
@@ -174,7 +178,9 @@ function onData(chunk) {
     if (rxBuf.length < total) return;
     const fr = rxBuf.slice(0, total); rxBuf = rxBuf.slice(total);
     let x = 0; for (let i = 0; i < total - 1; i++) x ^= fr[i];
-    log('← ' + hex(fr) + (x === fr[total-1] ? '' : '  (¡checksum inválido!)'));
+    const isCard = fr[4] === 0x02 && fr[5] === 0xA0 && total > 12;
+    const shown = isCard && !$('#showSensitive').checked ? `[respuesta de transacción de ${total} bytes, oculta porque contiene datos de tarjeta]` : hex(fr);
+    log('← ' + shown + (x === fr[total-1] ? '' : '  (¡checksum inválido!)'));
     handleResponse(fr.slice(4, total - 1));
   }
 }
@@ -251,6 +257,8 @@ function parseBer(d) {
 }
 // 1F48: len(2) + lenSeq(1) + seq + CVM(3) + len55(2) + campo55   (formato online del documento)
 function parseIcData(v) {
+  // Firmware i9-FW-V1.12.21 entrega el campo 55 directamente (empieza con un tag EMV como 9F26)
+  if (v[0] === 0x9F || v[0] === 0x5F || v[0] === 0x82 || v[0] === 0x95) return { field55: hex(v), tags: parseBer(v) };
   try {
     let o = 2; const sl = v[o++]; const seq = v.slice(o, o + sl); o += sl;
     const cvm = v.slice(o, o + 3); o += 3;
@@ -265,18 +273,19 @@ function showCard(err, data) {
   const res = $('#result');
   if (err !== 0x00) { res.innerHTML = `<p class="err">Transacción terminada: ${ERRORS[err] || 'código 0x' + err.toString(16)}</p>`; return; }
   const tlv = parseTlv2(data);
-  const card = { raw: hex(data), tlv: {} };
+  const card = { tlv: {} };
   let html = '<table><tr><th>Tag</th><th>Campo</th><th>Valor</th></tr>';
   for (const { tag, value } of tlv) {
-    card.tlv[tag] = hex(value);
-    html += `<tr><td>${tag}</td><td>${RESP_TAGS[tag] || ''}</td><td>${hex(value)}</td></tr>`;
+    card.tlv[tag] = maskHex(tag, hex(value));
+    html += `<tr><td>${tag}</td><td>${RESP_TAGS[tag] || ''}</td><td>${show(tag, value)}</td></tr>`;
   }
   html += '</table>';
   if (card.tlv['1F48']) {
-    const ic = parseIcData(unhex(card.tlv['1F48']));
-    card.ic = ic;
+    const ic = parseIcData(tlv.find(t => t.tag === '1F48').value);
+    card.ic = { field55: ic.field55, tags: Object.fromEntries(ic.tags.map(t => [t.tag, maskHex(t.tag, hex(t.value))])) };
+    if (!$('#showSensitive').checked) { card.ic.field55 = '(contiene PAN/pista: active "Mostrar datos sensibles" para exportarlo)'; }
     html += '<h2 style="margin-top:12px">Campo 55 (EMV)</h2><table><tr><th>Tag</th><th>Nombre</th><th>Valor</th></tr>';
-    for (const { tag, value } of ic.tags) html += `<tr><td>${tag}</td><td>${EMV_TAGS[tag] || ''}</td><td>${hex(value)}</td></tr>`;
+    for (const { tag, value } of ic.tags) html += `<tr><td>${tag}</td><td>${EMV_TAGS[tag] || ''}</td><td>${show(tag, value)}</td></tr>`;
     html += '</table>';
   }
   res.innerHTML = html;
@@ -284,6 +293,25 @@ function showCard(err, data) {
   $('#btnCopy').disabled = false;
   $('#txState').textContent = 'Lectura completa. Revise los datos y envíelos a su switch.';
 }
+
+// ---- enmascarado de datos sensibles (PAN, pista, titular) ----
+const SENSITIVE = new Set(['1F48','1F40','1F51','1F55','57','5A','5F20','9F1F','9F20','56']);
+function maskHex(tag, h) {
+  if ($('#showSensitive').checked || !SENSITIVE.has(tag)) return h;
+  if (tag === '1F51') { const pan = ascii(unhex(h)); return hex(new TextEncoder().encode(pan.slice(0,6) + '*'.repeat(Math.max(0, pan.length-10)) + pan.slice(-4))); }
+  if (tag === '1F55' || tag === '5F20') return '(oculto)';
+  if (tag === '1F48') return '(contiene PAN/pista: ver ic.tags)';
+  // PAN/pista en BCD: conservar 6 primeros y 4 últimos dígitos del PAN, ocultar el resto
+  const sep = h.search(/D/i); const panLen = sep > 0 ? sep : h.length;
+  return h.slice(0, 6) + '*'.repeat(Math.max(0, panLen - 10)) + h.slice(panLen - 4, panLen) + (sep > 0 ? 'D****' : '');
+}
+const show = (tag, u8) => {
+  if (tag === '1F48' && !$('#showSensitive').checked) return '(ver desglose del campo 55 abajo)';
+  const h = maskHex(tag, hex(u8));
+  let b = null; try { if (/^[0-9A-F]+$/.test(h)) b = unhex(h); } catch {}
+  const pr = b && b.length && b.every(c => c >= 0x20 && c < 0x7f) ? `  "${ascii(b)}"` : '';
+  return h + pr;
+};
 
 // ---- acciones ----
 function bcdNow() {
@@ -304,7 +332,7 @@ async function startPayment() {
     tlv1('1F03', bcdNow()) +
     tlv1('1F07', '313233') +
     tlv1('1F08', amt) +
-    tlv1('1F09', '33') +
+    tlv1('1F09', $('#extra').value.trim() || '33') +
     tlv1('1F0A', '3839');
   $('#result').innerHTML = ''; lastCard = null; $('#btnCopy').disabled = true;
   $('#txState').textContent = 'Esperando tarjeta…';
@@ -338,7 +366,7 @@ $('#btnCopy').onclick = async () => { const j = JSON.stringify(lastCard, null, 2
 document.querySelectorAll('[data-cmd]').forEach(b => b.onclick = () => ACTIONS[b.dataset.cmd]().catch(e => log('Error: ' + e.message)));
 
 // Exponer para pruebas
-window.i9 = { frame, cmd, parseTlv2, parseBer, hex, unhex };
+window.i9 = { frame, cmd, parseTlv2, parseBer, hex, unhex, onData };
 </script>
 </body>
 </html>
