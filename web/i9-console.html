@@ -1,0 +1,344 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Consola i9 mPOS</title>
+<style>
+  :root { --bg:#f6f7f9; --fg:#1b1f24; --mut:#5b6573; --card:#fff; --line:#d9dee5; --acc:#1f6feb; --ok:#1a7f37; --err:#cf222e; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#0d1117; --fg:#e6edf3; --mut:#8b949e; --card:#161b22; --line:#30363d; --acc:#4493f8; --ok:#3fb950; --err:#f85149; } }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.45 system-ui, sans-serif; }
+  main { max-width:900px; margin:0 auto; padding:16px; }
+  h1 { font-size:20px; margin:0 0 4px; }
+  p.sub { color:var(--mut); margin:0 0 16px; }
+  section { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px; margin-bottom:14px; }
+  h2 { font-size:15px; margin:0 0 10px; }
+  .row { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+  button { background:var(--acc); color:#fff; border:0; border-radius:8px; padding:9px 14px; font:inherit; cursor:pointer; }
+  button.sec { background:transparent; color:var(--fg); border:1px solid var(--line); }
+  button:disabled { opacity:.45; cursor:not-allowed; }
+  input, select { font:inherit; padding:8px; border-radius:8px; border:1px solid var(--line); background:var(--bg); color:var(--fg); min-width:0; }
+  label { color:var(--mut); font-size:13px; display:flex; flex-direction:column; gap:3px; }
+  #status { font-weight:600; }
+  .ok { color:var(--ok); } .err { color:var(--err); }
+  pre { background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:10px; overflow:auto; font:12px/1.4 ui-monospace, monospace; white-space:pre-wrap; word-break:break-all; max-height:420px; margin:8px 0 0; }
+  table { width:100%; border-collapse:collapse; font:12px ui-monospace, monospace; }
+  td, th { border-bottom:1px solid var(--line); padding:5px 6px; text-align:left; vertical-align:top; word-break:break-all; }
+  th { color:var(--mut); font-weight:600; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Consola i9 mPOS</h1>
+  <p class="sub">Habla con el lector i9 por Bluetooth LE usando el protocolo del fabricante (i9 UART V2.1). Requiere Chrome en Android, Windows, macOS o Linux, y una página servida por HTTPS o localhost.</p>
+
+  <section>
+    <h2>1. Conexión</h2>
+    <div class="row">
+      <button id="btnConnect">Buscar y conectar i9</button>
+      <button id="btnDisconnect" class="sec" disabled>Desconectar</button>
+      <span id="status">Desconectado</span>
+    </div>
+  </section>
+
+  <section>
+    <h2>2. Terminal</h2>
+    <div class="row">
+      <button data-cmd="info" disabled>Información del terminal</button>
+      <button data-cmd="battery" disabled>Batería</button>
+      <button data-cmd="rtc" disabled>Hora (RTC)</button>
+      <button data-cmd="setrtc" class="sec" disabled>Sincronizar hora</button>
+      <button data-cmd="loop" class="sec" disabled>Prueba de eco</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>3. Transacción (02 A0)</h2>
+    <div class="row">
+      <label>Monto
+        <input id="amount" type="number" min="0.01" step="0.01" value="10.00" style="width:110px"></label>
+      <label>Medio
+        <select id="mode">
+          <option value="70">Todos (banda, NFC, chip)</option>
+          <option value="10">Banda magnética</option>
+          <option value="20">NFC sin contacto</option>
+          <option value="40">Chip (IC)</option>
+        </select></label>
+      <label>Sistema de llaves
+        <select id="keysys">
+          <option value="01">DUKPT</option>
+          <option value="02">MK/SK</option>
+          <option value="03">Llave fija</option>
+        </select></label>
+      <label>Índice
+        <input id="keyidx" type="number" min="0" max="98" value="0" style="width:70px"></label>
+      <label>Control (1F02)
+        <input id="ctrl" value="10633630" style="width:110px"></label>
+      <label>Espera (s)
+        <input id="timeout" type="number" min="5" max="120" value="60" style="width:70px"></label>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <button id="btnPay" disabled>Iniciar cobro</button>
+      <button data-cmd="cancel" class="sec" disabled>Cancelar</button>
+      <button id="btnCopy" class="sec" disabled>Copiar JSON para el switch</button>
+    </div>
+    <div id="txState" style="margin-top:8px;color:var(--mut)"></div>
+    <div id="result"></div>
+  </section>
+
+  <section>
+    <h2>4. Comando manual</h2>
+    <div class="row">
+      <label style="flex:1">Primario + secundario + espera + longitud + datos (hex, sin encabezado ni checksum)
+        <input id="raw" placeholder="091B0A0000" style="width:100%"></label>
+      <button id="btnRaw" disabled>Enviar</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>Registro</h2>
+    <div class="row"><button id="btnClear" class="sec">Limpiar</button></div>
+    <pre id="log"></pre>
+  </section>
+</main>
+
+<script>
+// ---- Constantes BLE (servicio transparente UART de Microchip/ISSC, tomado del SDK posDeviceSDK) ----
+const SVC = '49535343-fe7d-4ae5-8fa9-9fafd205e455';
+const CH_NOTIFY = '49535343-1e4d-4bd9-ba61-23c647249616'; // terminal -> teléfono
+const CH_WRITE  = '49535343-8841-43f4-a8d4-ecbe34729bb3'; // teléfono -> terminal
+
+const ERRORS = {0x00:'Éxito',0x01:'Tiempo agotado',0x0A:'Cancelado por el usuario',0x72:'Error en datos de pista',0x73:'No se obtuvo vencimiento',0x74:'Error en campo 55',0x80:'Comando recibido',0x81:'Error al decodificar pista',0x82:'Falló el deslizado',0x83:'Tarjeta leída',0x84:'Tarjeta chip insertada',0x85:'Tarjeta chip retirada',0x86:'Falló lectura de chip',0x89:'Retire la tarjeta NFC',0x8A:'Tarjeta NFC detectada',0x8B:'Falló lectura NFC',0x8C:'Use otro medio',0x8D:'Sin servicio',0x8E:'Tarjeta rechazó la transacción',0x8F:'Use tarjeta NFC',0x90:'Falló reset del chip',0x94:'Falló handshake TLS',0x9E:'Transacción restringida',0xD4:'Error de tarjeta NFC',0xD7:'Presente una tarjeta',0xEA:'Terminal bloqueado',0xF0:'Encabezado no soportado',0xF1:'Comando primario no soportado',0xF2:'Comando secundario no soportado',0xF3:'Comando no soportado',0xF7:'Longitud de datos incorrecta',0xFC:'Datos incorrectos',0xFD:'ID de terminal incorrecto',0xFF:'Error de checksum'};
+
+const RESP_TAGS = {'1F40':'Pista en claro','1F41':'Tipo de tarjeta','1F42':'Modo de control','1F44':'ID de terminal','1F45':'TUSN','1F46':'Resultado','1F47':'PIN cifrado','1F48':'Datos IC/NFC','1F4A':'Aleatorio del terminal','1F4B':'Saldo e-cash','1F4C':'MAC','1F4E':'Vencimiento','1F4F':'Long. cifrada de pistas','1F50':'Long. original de pistas','1F52':'Número de secuencia (PAN seq)','1F53':'CVM','1F54':'Motivo de rechazo'};
+
+const EMV_TAGS = {'4F':'AID','50':'Etiqueta de aplicación','57':'Track 2 equivalente','5A':'PAN','5F20':'Titular','5F24':'Vencimiento','5F25':'Fecha efectiva','5F2A':'Moneda transacción','5F34':'PAN seq','82':'AIP','84':'DF Name','8A':'Código de respuesta','91':'Datos auth emisor','95':'TVR','9A':'Fecha transacción','9B':'TSI','9C':'Tipo transacción','9F02':'Monto autorizado','9F03':'Otro monto','9F06':'AID terminal','9F09':'Versión app','9F10':'IAD','9F1A':'País terminal','9F1E':'Serie IFD','9F26':'ARQC / criptograma','9F27':'CID','9F33':'Capacidades terminal','9F34':'Resultado CVM','9F35':'Tipo terminal','9F36':'ATC','9F37':'Número impredecible','9F41':'Contador de secuencia','9F53':'Categoría transacción','9F6E':'Form factor','DF02':'KSN (prop.)','DF03':'Datos cifrados (prop.)','C0':'KSN (prop.)','C2':'Datos cifrados (prop.)'};
+
+// ---- utilidades ----
+const $ = s => document.querySelector(s);
+const hex = u8 => Array.from(u8, b => b.toString(16).padStart(2,'0')).join('').toUpperCase();
+const unhex = h => { h = h.replace(/[^0-9a-f]/gi,''); if (h.length % 2) throw new Error('hex impar'); return Uint8Array.from(h.match(/../g) || [], x => parseInt(x,16)); };
+const ascii = u8 => Array.from(u8, b => b >= 0x20 && b < 0x7f ? String.fromCharCode(b) : '.').join('');
+const concat = (...a) => { const out = new Uint8Array(a.reduce((n,x)=>n+x.length,0)); let o=0; for (const x of a) { out.set(x,o); o+=x.length; } return out; };
+function log(msg, cls) { const el = $('#log'); const t = new Date().toLocaleTimeString(); el.textContent += `[${t}] ${msg}\n`; el.scrollTop = el.scrollHeight; }
+
+// ---- trama: 'M' + LEN(2, BE) + VER(00) + DATOS + XOR (de todo lo anterior) ----
+function frame(body) {
+  const len = body.length + 1;
+  const pre = concat(Uint8Array.of(0x4D, len >> 8, len & 0xff, 0x00), body);
+  let x = 0; for (const b of pre) x ^= b;
+  return concat(pre, Uint8Array.of(x));
+}
+// cuerpo de comando: primario, secundario, espera(s), longitud(2), datos
+function cmd(p, s, timeout, data = new Uint8Array()) {
+  return concat(Uint8Array.of(p, s, timeout, data.length >> 8, data.length & 0xff), data);
+}
+
+// ---- BLE ----
+let device, chWrite, rxBuf = new Uint8Array(), pending = null, lastCard = null;
+
+async function connect() {
+  if (!navigator.bluetooth) { alert('Este navegador no soporta Web Bluetooth. Use Chrome (Android/escritorio) por HTTPS o localhost.'); return; }
+  device = await navigator.bluetooth.requestDevice({ acceptAllDevices: true, optionalServices: [SVC] });
+  device.addEventListener('gattserverdisconnected', () => setConnected(false));
+  setStatus('Conectando…');
+  const server = await device.gatt.connect();
+  const svc = await server.getPrimaryService(SVC);
+  chWrite = await svc.getCharacteristic(CH_WRITE);
+  const chN = await svc.getCharacteristic(CH_NOTIFY);
+  await chN.startNotifications();
+  chN.addEventListener('characteristicvaluechanged', e => onData(new Uint8Array(e.target.value.buffer)));
+  setConnected(true);
+  log(`Conectado a ${device.name || device.id}`);
+}
+
+async function write(bytes) {
+  log('→ ' + hex(bytes));
+  const noResp = chWrite.properties.writeWithoutResponse;
+  for (let i = 0; i < bytes.length; i += 20) {
+    const chunk = bytes.slice(i, i + 20);
+    if (noResp) await chWrite.writeValueWithoutResponse(chunk); else await chWrite.writeValueWithResponse(chunk);
+  }
+}
+
+function onData(chunk) {
+  rxBuf = concat(rxBuf, chunk);
+  while (rxBuf.length >= 4) {
+    const start = rxBuf.indexOf(0x6D);
+    if (start < 0) { rxBuf = new Uint8Array(); return; }
+    if (start > 0) rxBuf = rxBuf.slice(start);
+    if (rxBuf.length < 4) return;
+    const len = (rxBuf[1] << 8) | rxBuf[2];
+    const total = 3 + len + 1;
+    if (rxBuf.length < total) return;
+    const fr = rxBuf.slice(0, total); rxBuf = rxBuf.slice(total);
+    let x = 0; for (let i = 0; i < total - 1; i++) x ^= fr[i];
+    log('← ' + hex(fr) + (x === fr[total-1] ? '' : '  (¡checksum inválido!)'));
+    handleResponse(fr.slice(4, total - 1));
+  }
+}
+
+function handleResponse(b) {
+  const p = b[0], s = b[1], err = b[2];
+  const dlen = (b[3] << 8) | b[4];
+  const data = b.slice(5, 5 + dlen);
+  const key = `${p.toString(16).padStart(2,'0')}${s.toString(16).padStart(2,'0')}`.toUpperCase();
+  const errTxt = ERRORS[err] || 'desconocido';
+  // Notificaciones intermedias de la transacción
+  if (key === '02A0' && err >= 0x80 && dlen === 0) {
+    $('#txState').textContent = `Estado: ${errTxt} (0x${err.toString(16)})`;
+    log(`   02A0 estado 0x${err.toString(16)}: ${errTxt}`);
+    return;
+  }
+  log(`   ${key} código 0x${err.toString(16).padStart(2,'0')} (${errTxt}), ${dlen} bytes`);
+  if (key === '091B') showInfo(data);
+  else if (key === '0913' && dlen >= 2) log(`   Batería: ${(data[0] << 8) | data[1]} mV`);
+  else if (key === '0932' && dlen >= 7) log(`   RTC: ${hex(data)}`);
+  else if (key === '02A0') showCard(err, data);
+  if (pending && pending.key === key) { pending.resolve({ err, data }); pending = null; }
+}
+
+function send(body) {
+  const key = hex(body.slice(0, 2));
+  return new Promise((resolve, reject) => {
+    pending = { key, resolve };
+    write(frame(body)).catch(reject);
+    setTimeout(() => { if (pending && pending.key === key) { pending = null; reject(new Error('sin respuesta')); } }, (body[2] + 5) * 1000);
+  });
+}
+
+// ---- 09 1B: información del terminal ----
+function showInfo(d) {
+  if (d.length < 4) return;
+  const names3 = ['Número de terminal','Versión app','Nombre Bluetooth','Versión Bluetooth','MAC BT','Fecha app','Comercio','Tipo de protocolo'];
+  const names4 = ['TUSN','Versión kernel','Versión hardware','Versión firmware','CPU SN'];
+  let o = 4; const rows = [['Código de máquina', hex(d.slice(0,1))], ['Fabricante', hex(d.slice(1,2))]];
+  for (const [mask, names] of [[d[2], names3], [d[3], names4]]) {
+    for (let bit = 0; bit < names.length; bit++) {
+      if (!(mask & (1 << bit)) || o >= d.length) continue;
+      const l = d[o]; const v = d.slice(o + 1, o + 1 + l); o += 1 + l;
+      const printable = v.every(c => c >= 0x20 && c < 0x7f);
+      rows.push([names[bit], printable ? ascii(v) : hex(v)]);
+    }
+  }
+  log('   Información:\n' + rows.map(r => `     ${r[0]}: ${r[1]}`).join('\n'));
+}
+
+// ---- TLV de la respuesta 02 A0: tag 2 bytes + longitud (1 byte, o 81/82 extendida) ----
+function parseTlv2(d) {
+  const out = []; let o = 0;
+  while (o + 3 <= d.length) {
+    const tag = hex(d.slice(o, o + 2)); o += 2;
+    let l = d[o++];
+    if (l === 0x81) l = d[o++]; else if (l === 0x82) { l = (d[o] << 8) | d[o+1]; o += 2; }
+    out.push({ tag, value: d.slice(o, o + l) }); o += l;
+  }
+  return out;
+}
+// TLV BER de EMV (campo 55)
+function parseBer(d) {
+  const out = []; let o = 0;
+  while (o < d.length) {
+    if (d[o] === 0x00 || d[o] === 0xFF) { o++; continue; }
+    let t0 = o; if ((d[o++] & 0x1F) === 0x1F) { while (d[o++] & 0x80); }
+    const tag = hex(d.slice(t0, o));
+    let l = d[o++];
+    if (l & 0x80) { const n = l & 0x7f; l = 0; for (let i = 0; i < n; i++) l = (l << 8) | d[o++]; }
+    out.push({ tag, value: d.slice(o, o + l) }); o += l;
+  }
+  return out;
+}
+// 1F48: len(2) + lenSeq(1) + seq + CVM(3) + len55(2) + campo55   (formato online del documento)
+function parseIcData(v) {
+  try {
+    let o = 2; const sl = v[o++]; const seq = v.slice(o, o + sl); o += sl;
+    const cvm = v.slice(o, o + 3); o += 3;
+    const l55 = (v[o] << 8) | v[o+1]; o += 2;
+    const f55 = v.slice(o, o + l55);
+    if (f55.length !== l55 || l55 === 0) throw 0;
+    return { seq: hex(seq), cvm: hex(cvm), field55: hex(f55), tags: parseBer(f55) };
+  } catch { return { field55: hex(v), tags: (() => { try { return parseBer(v); } catch { return []; } })() }; }
+}
+
+function showCard(err, data) {
+  const res = $('#result');
+  if (err !== 0x00) { res.innerHTML = `<p class="err">Transacción terminada: ${ERRORS[err] || 'código 0x' + err.toString(16)}</p>`; return; }
+  const tlv = parseTlv2(data);
+  const card = { raw: hex(data), tlv: {} };
+  let html = '<table><tr><th>Tag</th><th>Campo</th><th>Valor</th></tr>';
+  for (const { tag, value } of tlv) {
+    card.tlv[tag] = hex(value);
+    html += `<tr><td>${tag}</td><td>${RESP_TAGS[tag] || ''}</td><td>${hex(value)}</td></tr>`;
+  }
+  html += '</table>';
+  if (card.tlv['1F48']) {
+    const ic = parseIcData(unhex(card.tlv['1F48']));
+    card.ic = ic;
+    html += '<h2 style="margin-top:12px">Campo 55 (EMV)</h2><table><tr><th>Tag</th><th>Nombre</th><th>Valor</th></tr>';
+    for (const { tag, value } of ic.tags) html += `<tr><td>${tag}</td><td>${EMV_TAGS[tag] || ''}</td><td>${hex(value)}</td></tr>`;
+    html += '</table>';
+  }
+  res.innerHTML = html;
+  lastCard = card;
+  $('#btnCopy').disabled = false;
+  $('#txState').textContent = 'Lectura completa. Revise los datos y envíelos a su switch.';
+}
+
+// ---- acciones ----
+function bcdNow() {
+  const d = new Date(), p = n => String(n).padStart(2,'0');
+  return `${d.getFullYear()}${p(d.getMonth()+1)}${p(d.getDate())}${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+}
+const tlv1 = (tag, valHex) => tag + (valHex.length/2).toString(16).padStart(2,'0').toUpperCase() + valHex;
+
+async function startPayment() {
+  const cents = Math.round(parseFloat($('#amount').value) * 100);
+  if (!(cents > 0)) { alert('Monto inválido'); return; }
+  const amt = hex(new TextEncoder().encode(String(cents)));
+  const key = $('#keysys').value + Number($('#keyidx').value).toString(16).padStart(2,'0');
+  const body =
+    tlv1('1F01', $('#mode').value) +
+    tlv1('1F04', key) +
+    tlv1('1F02', $('#ctrl').value.trim()) +
+    tlv1('1F03', bcdNow()) +
+    tlv1('1F07', '313233') +
+    tlv1('1F08', amt) +
+    tlv1('1F09', '33') +
+    tlv1('1F0A', '3839');
+  $('#result').innerHTML = ''; lastCard = null; $('#btnCopy').disabled = true;
+  $('#txState').textContent = 'Esperando tarjeta…';
+  const t = Number($('#timeout').value) || 60;
+  try { await send(cmd(0x02, 0xA0, t, unhex(body))); } catch (e) { log('Error: ' + e.message); }
+}
+
+const ACTIONS = {
+  info:    () => send(cmd(0x09, 0x1B, 10)),
+  battery: () => send(cmd(0x09, 0x13, 10)),
+  rtc:     () => send(cmd(0x09, 0x32, 10)),
+  setrtc:  () => send(cmd(0x09, 0x31, 10, unhex(bcdNow()))), // 7 bytes BCD AAAAMMDDhhmmss
+  loop:    () => send(cmd(0x09, 0xFF, 10, unhex('0102030405'))),
+  cancel:  () => send(cmd(0x09, 0x07, 10)),
+};
+
+function setStatus(t, cls) { const s = $('#status'); s.textContent = t; s.className = cls || ''; }
+function setConnected(on) {
+  setStatus(on ? 'Conectado' : 'Desconectado', on ? 'ok' : '');
+  document.querySelectorAll('[data-cmd], #btnPay, #btnRaw, #btnDisconnect').forEach(b => b.disabled = !on);
+  $('#btnConnect').disabled = on;
+  if (!on) log('Desconectado');
+}
+
+$('#btnConnect').onclick = () => connect().catch(e => { setStatus('Error: ' + e.message, 'err'); log('Error: ' + e.message); });
+$('#btnDisconnect').onclick = () => device && device.gatt.disconnect();
+$('#btnPay').onclick = startPayment;
+$('#btnClear').onclick = () => $('#log').textContent = '';
+$('#btnRaw').onclick = () => { try { const b = unhex($('#raw').value); send(b).catch(e => log('Error: ' + e.message)); } catch (e) { alert(e.message); } };
+$('#btnCopy').onclick = async () => { const j = JSON.stringify(lastCard, null, 2); try { await navigator.clipboard.writeText(j); log('JSON copiado'); } catch { log(j); } };
+document.querySelectorAll('[data-cmd]').forEach(b => b.onclick = () => ACTIONS[b.dataset.cmd]().catch(e => log('Error: ' + e.message)));
+
+// Exponer para pruebas
+window.i9 = { frame, cmd, parseTlv2, parseBer, hex, unhex };
+</script>
+</body>
+</html>
