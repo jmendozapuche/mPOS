@@ -82,6 +82,7 @@
     </div>
     <div class="row" style="margin-top:10px">
       <button id="btnPay" disabled>Iniciar cobro</button>
+      <button id="btnCO" class="sec" title="Prueba enviar moneda y país de Colombia al lector en 1F09">1F09 = Colombia</button>
       <button data-cmd="cancel" class="sec" disabled>Cancelar</button>
       <button id="btnCopy" class="sec" disabled>Copiar JSON para el switch</button>
     </div>
@@ -92,7 +93,29 @@
   </section>
 
   <section>
-    <h2>4. Comando manual</h2>
+    <h2>4. Switch SmartVista (ISO 8583)</h2>
+    <p style="margin:0 0 8px;color:var(--mut)">Requiere el puente <code>bridge/svfe-bridge.js</code> corriendo (ver README).</p>
+    <div class="row">
+      <label style="flex:1;min-width:200px">URL del puente
+        <input id="bridgeUrl" value="http://localhost:8080" style="width:100%"></label>
+      <label>Terminal (DE41)
+        <input id="tid" value="" placeholder="del puente" maxlength="8" style="width:110px"></label>
+      <label>Comercio (DE42)
+        <input id="mid" value="" placeholder="del puente" maxlength="15" style="width:160px"></label>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <button id="btnHealth" class="sec">Ver puente</button>
+      <button id="btnEcho" class="sec">Eco 0800</button>
+      <button id="btnSend" disabled>Enviar 0200</button>
+      <button id="btnRev" class="sec" disabled>Reverso 0400</button>
+    </div>
+    <label style="flex-direction:row;align-items:center;gap:6px;margin-top:10px">
+      <input type="checkbox" id="autoSend" checked> Enviar al switch automáticamente después de leer la tarjeta</label>
+    <div id="swResult"></div>
+  </section>
+
+  <section>
+    <h2>5. Comando manual</h2>
     <div class="row">
       <label style="flex:1">Primario + secundario + espera + longitud + datos (hex, sin encabezado ni checksum)
         <input id="raw" placeholder="091B0A0000" style="width:100%"></label>
@@ -140,7 +163,7 @@ function cmd(p, s, timeout, data = new Uint8Array()) {
 }
 
 // ---- BLE ----
-let device, chWrite, rxBuf = new Uint8Array(), pending = null, lastCard = null;
+let device, chWrite, rxBuf = new Uint8Array(), pending = null, lastCard = null, lastRaw = null, lastAmountCents = 0, lastTx = null;
 
 async function connect() {
   if (!navigator.bluetooth) { alert('Este navegador no soporta Web Bluetooth. Use Chrome (Android/escritorio) por HTTPS o localhost.'); return; }
@@ -202,6 +225,7 @@ function handleResponse(b) {
   else if (key === '0913' && dlen >= 2) log(`   Batería: ${(data[0] << 8) | data[1]} mV`);
   else if (key === '0932' && dlen >= 7) log(`   RTC: ${hex(data)}`);
   else if (key === '02A0') showCard(err, data);
+  else if (key === '02A1') onWriteBack(err, data);
   if (pending && pending.key === key) { pending.resolve({ err, data }); pending = null; }
 }
 
@@ -290,6 +314,16 @@ function showCard(err, data) {
   }
   res.innerHTML = html;
   lastCard = card;
+  const g = t => (tlv.find(x => x.tag === t) || {}).value;
+  lastRaw = {
+    cardType: g('1F41') ? hex(g('1F41')) : '',
+    track2: g('1F40') ? hex(g('1F40')) : '',
+    pinBlock: g('1F47') ? hex(g('1F47')) : undefined,
+    field55: g('1F48') ? parseIcData(g('1F48')).field55 : '',
+    amountCents: lastAmountCents,
+  };
+  $('#btnSend').disabled = false;
+  if ($('#autoSend').checked) sendPurchase();
   $('#btnCopy').disabled = false;
   $('#txState').textContent = 'Lectura completa. Revise los datos y envíelos a su switch.';
 }
@@ -313,6 +347,62 @@ const show = (tag, u8) => {
   return h + pr;
 };
 
+// ---- switch SmartVista vía puente ----
+const bridge = () => $('#bridgeUrl').value.replace(/\/+$/, '');
+function swShow(html) { $('#swResult').innerHTML = html; }
+async function bridgeCall(path, body) {
+  const r = await fetch(bridge() + path, { method: body ? 'POST' : 'GET', headers: { 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
+  const j = await r.json();
+  if (!r.ok || j.error) throw Object.assign(new Error(j.error || ('HTTP ' + r.status)), { data: j });
+  return j;
+}
+function fieldsTable(f) {
+  return '<table><tr><th>DE</th><th>Valor</th></tr>' + Object.entries(f).map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join('') + '</table>';
+}
+async function sendPurchase() {
+  if (!lastRaw) return;
+  const body = { ...lastRaw };
+  if ($('#tid').value.trim()) body.tid = $('#tid').value.trim();
+  if ($('#mid').value.trim()) body.mid = $('#mid').value.trim();
+  swShow('<p>Enviando 0200…</p>'); log('Puente: POST /purchase');
+  try {
+    const j = await bridgeCall('/purchase', body);
+    const r = j.response, ok = ['000', '001', '003'].includes(r.fields[39]);
+    lastTx = { stan: j.stan, rrn: r.fields[37], approved: ok };
+    $('#btnRev').disabled = false;
+    log(`Switch: ${r.mti} DE39=${r.fields[39]} ${r.rcText} (${j.ms} ms)`);
+    (j.warnings || []).forEach(w => log('Aviso: ' + w));
+    swShow(`<p class="${ok ? 'ok' : 'err'}" style="font-weight:600">${r.mti} · DE39 ${r.fields[39]} · ${r.rcText || ''}${r.fields[38] ? ' · Autorización ' + r.fields[38] : ''}</p>`
+      + (j.warnings && j.warnings.length ? `<p class="err">${j.warnings.join('<br>')}</p>` : '')
+      + '<h2 style="margin-top:10px">Enviado</h2>' + fieldsTable(j.request.fields)
+      + '<h2 style="margin-top:10px">Recibido</h2>' + fieldsTable(r.fields));
+    // Devolver al lector la respuesta del emisor (02 A1) si hay DE55
+    if (r.fields[55] && device && device.gatt.connected) {
+      log('Enviando DE55 de respuesta al lector (02 A1)');
+      send(cmd(0x02, 0xA1, 30, unhex(r.fields[55]))).catch(e => log('02A1: ' + e.message));
+    }
+  } catch (e) {
+    log('Puente: ' + e.message);
+    const d = e.data || {};
+    swShow(`<p class="err">${e.message}</p>` + (d.reversal ? '<p>Reverso automático: ' + (d.reversal.response ? 'DE39 ' + d.reversal.response.fields[39] : d.reversal.error) + '</p>' : '')
+      + (e.message === 'Failed to fetch' ? '<p>No se pudo contactar al puente. ¿Está corriendo y la URL es correcta?</p>' : ''));
+  }
+}
+function onWriteBack(err, data) {
+  const res = data.length ? data[0] : null;
+  log(`   02A1 resultado: ${res === 0 ? 'aceptado por la tarjeta' : res === 1 ? 'RECHAZADO por la tarjeta (requiere reverso)' : 'código ' + err}`);
+  if (res === 1 && lastTx && lastTx.approved) { log('La tarjeta rechazó la respuesta del emisor: enviando reverso'); sendReversal(); }
+}
+async function sendReversal() {
+  if (!lastTx) return;
+  try {
+    const j = await bridgeCall('/reversal', { stan: lastTx.stan, rrn: lastTx.rrn });
+    log(`Reverso: ${j.response.mti} DE39=${j.response.fields[39]}`);
+    swShow(`<p style="font-weight:600">Reverso ${j.response.mti} · DE39 ${j.response.fields[39]} ${j.response.rcText || ''}</p>` + fieldsTable(j.response.fields));
+    $('#btnRev').disabled = true;
+  } catch (e) { log('Reverso: ' + e.message); swShow(`<p class="err">Reverso: ${e.message}</p>`); }
+}
+
 // ---- acciones ----
 function bcdNow() {
   const d = new Date(), p = n => String(n).padStart(2,'0');
@@ -323,6 +413,7 @@ const tlv1 = (tag, valHex) => tag + (valHex.length/2).toString(16).padStart(2,'0
 async function startPayment() {
   const cents = Math.round(parseFloat($('#amount').value) * 100);
   if (!(cents > 0)) { alert('Monto inválido'); return; }
+  lastAmountCents = cents;
   const amt = hex(new TextEncoder().encode(String(cents)));
   const key = $('#keysys').value + Number($('#keyidx').value).toString(16).padStart(2,'0');
   const body =
@@ -360,13 +451,18 @@ function setConnected(on) {
 $('#btnConnect').onclick = () => connect().catch(e => { setStatus('Error: ' + e.message, 'err'); log('Error: ' + e.message); });
 $('#btnDisconnect').onclick = () => device && device.gatt.disconnect();
 $('#btnPay').onclick = startPayment;
+$('#btnCO').onclick = () => { $('#extra').value = '5F2A0201709F1A020170'; log('1F09 = 5F2A 0170 (COP) + 9F1A 0170 (Colombia). Si el lector responde error, vuelva a 33.'); };
+$('#btnSend').onclick = sendPurchase;
+$('#btnRev').onclick = sendReversal;
+$('#btnHealth').onclick = () => bridgeCall('/health').then(j => { log('Puente: ' + JSON.stringify(j)); swShow('<p class="ok">Puente activo · switch ' + j.switch + (j.mock ? ' (SIMULADOR)' : '') + ' · TID ' + j.tid + ' · MID ' + j.mid + ' · moneda ' + j.currency + '</p>'); }).catch(e => { log('Puente: ' + e.message); swShow('<p class="err">No responde el puente: ' + e.message + '</p>'); });
+$('#btnEcho').onclick = () => bridgeCall('/echo', {}).then(j => { log(`Eco: ${j.response.mti} DE39=${j.response.fields[39]} (${j.ms} ms)`); swShow(`<p class="${j.response.fields[39] === '000' ? 'ok' : 'err'}">Eco ${j.response.mti} · DE39 ${j.response.fields[39]} · ${j.ms} ms</p>`); }).catch(e => { log('Eco: ' + e.message); swShow('<p class="err">Eco: ' + e.message + '</p>'); });
 $('#btnClear').onclick = () => $('#log').textContent = '';
 $('#btnRaw').onclick = () => { try { const b = unhex($('#raw').value); send(b).catch(e => log('Error: ' + e.message)); } catch (e) { alert(e.message); } };
 $('#btnCopy').onclick = async () => { const j = JSON.stringify(lastCard, null, 2); try { await navigator.clipboard.writeText(j); log('JSON copiado'); } catch { log(j); } };
 document.querySelectorAll('[data-cmd]').forEach(b => b.onclick = () => ACTIONS[b.dataset.cmd]().catch(e => log('Error: ' + e.message)));
 
 // Exponer para pruebas
-window.i9 = { frame, cmd, parseTlv2, parseBer, hex, unhex, onData };
+window.i9 = { frame, cmd, parseTlv2, parseBer, hex, unhex, onData, setAmount: c => lastAmountCents = c };
 </script>
 </body>
 </html>
