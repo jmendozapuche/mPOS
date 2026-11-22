@@ -212,7 +212,7 @@ function send(body) {
 function showInfo(d) {
   if (d.length < 4) return;
   const names3 = ['Número de terminal','Versión app','Nombre Bluetooth','Versión Bluetooth','MAC BT','Fecha app','Comercio','Tipo de protocolo'];
-  const names4 = ['TUSN','Versión kernel','Versión hardware','Versión firmware','CPU SN'];
+  const names4 = ['TUSN','Versión kernel','Versión hardware','Versión firmware','CPU SN','Perfil de configuración','Dato extra (bit6)','Dato extra (bit7)'];
   let o = 4; const rows = [['Código de máquina', hex(d.slice(0,1))], ['Fabricante', hex(d.slice(1,2))]];
   for (const [mask, names] of [[d[2], names3], [d[3], names4]]) {
     for (let bit = 0; bit < names.length; bit++) {
