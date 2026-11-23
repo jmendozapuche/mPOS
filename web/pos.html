@@ -1,0 +1,473 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b5cd5">
+<title>Cobros POS</title>
+<style>
+  :root {
+    --bg:#f3f5f8; --surface:#ffffff; --fg:#14181f; --mut:#667085; --line:#e3e7ee;
+    --brand:#0b5cd5; --brand-fg:#fff; --ok:#12805c; --ok-bg:#e7f6ef; --err:#c4320a; --err-bg:#fdeee8; --key:#eef1f6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#0e1116; --surface:#171b22; --fg:#eef1f5; --mut:#98a2b3; --line:#2a303b; --brand:#4c8dff; --brand-fg:#0b1220; --ok:#3ccf91; --ok-bg:#10281f; --err:#ff7a59; --err-bg:#2c1712; --key:#222834; }
+  }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html, body { height:100%; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  .app { max-width:460px; margin:0 auto; min-height:100%; display:flex; flex-direction:column; }
+  header { display:flex; align-items:center; gap:10px; padding:14px 16px 8px; }
+  header .merchant { font-weight:700; font-size:17px; flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .pill { display:inline-flex; align-items:center; gap:6px; font-size:13px; padding:6px 10px; border-radius:999px; background:var(--surface); border:1px solid var(--line); color:var(--mut); cursor:pointer; }
+  .dot { width:8px; height:8px; border-radius:50%; background:#aab2bf; }
+  .dot.on { background:var(--ok); } .dot.off { background:var(--err); }
+  .iconbtn { background:var(--surface); border:1px solid var(--line); color:var(--fg); border-radius:10px; width:38px; height:34px; font-size:18px; cursor:pointer; }
+  main { flex:1; display:flex; flex-direction:column; padding:0 16px 16px; }
+  .screen { display:none; flex:1; flex-direction:column; }
+  .screen.active { display:flex; }
+  .demo-banner { margin:0 16px 6px; padding:6px 10px; border-radius:8px; background:#fff4d6; color:#7a5300; font-size:13px; text-align:center; display:none; }
+  @media (prefers-color-scheme: dark) { .demo-banner { background:#3a2e0c; color:#ffd77a; } }
+
+  /* Monto */
+  .amount-box { text-align:center; padding:22px 0 10px; }
+  .amount-label { color:var(--mut); font-size:14px; }
+  .amount { font-size:44px; font-weight:750; letter-spacing:-.5px; margin-top:4px; font-variant-numeric:tabular-nums; word-break:break-all; }
+  .desc { width:100%; margin:8px 0 12px; padding:12px; border-radius:12px; border:1px solid var(--line); background:var(--surface); color:var(--fg); font:inherit; }
+  .keypad { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin-top:auto; }
+  .key { height:62px; border:0; border-radius:14px; background:var(--key); color:var(--fg); font-size:24px; font-weight:600; cursor:pointer; }
+  .key:active { transform:scale(.97); }
+  .primary { width:100%; height:58px; margin-top:12px; border:0; border-radius:14px; background:var(--brand); color:var(--brand-fg); font-size:18px; font-weight:700; cursor:pointer; }
+  .primary:disabled { opacity:.4; cursor:not-allowed; }
+  .ghost { width:100%; height:50px; margin-top:10px; border:1px solid var(--line); border-radius:14px; background:transparent; color:var(--fg); font-size:16px; font-weight:600; cursor:pointer; }
+
+  /* Esperando tarjeta / procesando */
+  .center { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; gap:10px; padding:20px 0; }
+  .big { font-size:34px; font-weight:750; font-variant-numeric:tabular-nums; }
+  .title { font-size:20px; font-weight:700; }
+  .sub { color:var(--mut); }
+  .tap { width:150px; height:150px; border-radius:50%; display:grid; place-items:center; background:var(--surface); border:2px solid var(--line); position:relative; margin:12px 0; }
+  .tap::before, .tap::after { content:""; position:absolute; inset:-2px; border-radius:50%; border:2px solid var(--brand); opacity:0; animation:ring 2s infinite; }
+  .tap::after { animation-delay:1s; }
+  @keyframes ring { 0% { transform:scale(1); opacity:.6 } 100% { transform:scale(1.45); opacity:0 } }
+  .spinner { width:56px; height:56px; border-radius:50%; border:5px solid var(--line); border-top-color:var(--brand); animation:spin 1s linear infinite; margin:18px 0; }
+  @keyframes spin { to { transform:rotate(360deg) } }
+  @media (prefers-reduced-motion: reduce) { .tap::before, .tap::after, .spinner { animation:none; } }
+
+  /* Resultado */
+  .badge { width:92px; height:92px; border-radius:50%; display:grid; place-items:center; font-size:46px; font-weight:800; }
+  .badge.ok { background:var(--ok-bg); color:var(--ok); } .badge.err { background:var(--err-bg); color:var(--err); }
+  .card-line { color:var(--mut); }
+  .kv { width:100%; background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:6px 14px; margin-top:8px; text-align:left; }
+  .kv div { display:flex; justify-content:space-between; gap:12px; padding:8px 0; border-bottom:1px solid var(--line); font-size:14px; }
+  .kv div:last-child { border-bottom:0; }
+  .kv span:first-child { color:var(--mut); }
+  .kv span:last-child { font-weight:600; text-align:right; word-break:break-all; }
+
+  /* Historial */
+  .list { display:flex; flex-direction:column; gap:8px; margin-top:8px; }
+  .tx { background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:12px 14px; display:flex; gap:10px; align-items:center; cursor:pointer; }
+  .tx .l { flex:1; min-width:0; }
+  .tx .a { font-weight:700; font-variant-numeric:tabular-nums; }
+  .tx .m { color:var(--mut); font-size:13px; }
+  .tag { font-size:12px; font-weight:700; padding:3px 8px; border-radius:999px; }
+  .tag.ok { background:var(--ok-bg); color:var(--ok); } .tag.err { background:var(--err-bg); color:var(--err); } .tag.void { background:var(--key); color:var(--mut); }
+  .totals { display:flex; gap:8px; margin-top:6px; }
+  .totals > div { flex:1; background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:10px 12px; }
+  .totals b { display:block; font-size:20px; font-variant-numeric:tabular-nums; }
+  .totals span { color:var(--mut); font-size:13px; }
+  h2 { font-size:18px; margin:6px 0 4px; }
+
+  /* Ajustes */
+  .field { display:flex; flex-direction:column; gap:4px; margin-top:12px; font-size:14px; color:var(--mut); }
+  .field input, .field select { padding:12px; border-radius:12px; border:1px solid var(--line); background:var(--surface); color:var(--fg); font:inherit; }
+  .check { display:flex; gap:10px; align-items:center; margin-top:14px; font-size:15px; }
+  .note { font-size:13px; color:var(--mut); margin-top:8px; }
+
+  nav { display:flex; border-top:1px solid var(--line); background:var(--surface); padding-bottom:env(safe-area-inset-bottom); }
+  nav button { flex:1; padding:12px 0 10px; border:0; background:none; color:var(--mut); font:600 13px system-ui, sans-serif; cursor:pointer; }
+  nav button.active { color:var(--brand); }
+  nav button i { display:block; font-style:normal; font-size:20px; margin-bottom:2px; }
+
+  /* Recibo */
+  .receipt { width:100%; background:#fff; color:#111; border-radius:6px; padding:18px 16px; font:13px/1.5 ui-monospace, Menlo, Consolas, monospace; box-shadow:0 1px 3px rgba(0,0,0,.15); }
+  .receipt .c { text-align:center; } .receipt hr { border:0; border-top:1px dashed #999; margin:10px 0; }
+  .receipt .r { display:flex; justify-content:space-between; gap:10px; } .receipt .tot { font-size:18px; font-weight:800; }
+  @media print {
+    body * { visibility:hidden; }
+    .receipt, .receipt * { visibility:visible; }
+    .receipt { position:absolute; left:0; top:0; width:58mm; box-shadow:none; padding:0; }
+  }
+  .toast { position:fixed; left:50%; bottom:84px; transform:translateX(-50%); background:#14181f; color:#fff; padding:10px 14px; border-radius:10px; font-size:14px; opacity:0; transition:opacity .2s; pointer-events:none; max-width:90%; text-align:center; }
+  .toast.show { opacity:.95; }
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <div class="merchant" id="hdrMerchant">Mi Comercio</div>
+    <button class="pill" id="readerPill" title="Lector"><span class="dot" id="readerDot"></span><span id="readerTxt">Sin lector</span></button>
+  </header>
+  <div class="demo-banner" id="demoBanner">MODO DEMO · tarjeta simulada</div>
+
+  <main>
+    <!-- 1. Monto -->
+    <section class="screen active" id="scrAmount">
+      <div class="amount-box">
+        <div class="amount-label">Monto a cobrar</div>
+        <div class="amount" id="amount">$ 0</div>
+      </div>
+      <input class="desc" id="desc" placeholder="Descripción (opcional)" maxlength="40">
+      <div class="keypad" id="keypad">
+        <button class="key">1</button><button class="key">2</button><button class="key">3</button>
+        <button class="key">4</button><button class="key">5</button><button class="key">6</button>
+        <button class="key">7</button><button class="key">8</button><button class="key">9</button>
+        <button class="key">000</button><button class="key">0</button><button class="key" aria-label="Borrar">⌫</button>
+      </div>
+      <button class="primary" id="btnCharge" disabled>Cobrar</button>
+    </section>
+
+    <!-- 2. Esperando tarjeta -->
+    <section class="screen" id="scrWait">
+      <div class="center">
+        <div class="sub">Total</div>
+        <div class="big" id="waitAmount"></div>
+        <div class="tap" aria-hidden="true">
+          <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><rect x="3" y="6" width="13" height="10" rx="2"/><path d="M3 10h13"/><path d="M19 8.5a5 5 0 0 1 0 7"/><path d="M21.5 6a8.5 8.5 0 0 1 0 12"/></svg>
+        </div>
+        <div class="title" id="waitTitle">Acerque, inserte o deslice la tarjeta</div>
+        <div class="sub" id="waitSub">Esperando tarjeta…</div>
+      </div>
+      <button class="ghost" id="btnCancel">Cancelar</button>
+    </section>
+
+    <!-- 3. Procesando -->
+    <section class="screen" id="scrProc">
+      <div class="center">
+        <div class="spinner"></div>
+        <div class="title" id="procTitle">Procesando pago</div>
+        <div class="sub" id="procSub">Comunicando con el autorizador…</div>
+      </div>
+    </section>
+
+    <!-- 4. Resultado -->
+    <section class="screen" id="scrResult">
+      <div class="center" style="justify-content:flex-start;padding-top:24px">
+        <div class="badge" id="resBadge"></div>
+        <div class="title" id="resTitle"></div>
+        <div class="big" id="resAmount"></div>
+        <div class="card-line" id="resCard"></div>
+        <div class="kv" id="resKv"></div>
+      </div>
+      <button class="primary" id="btnNew">Nuevo cobro</button>
+      <button class="ghost" id="btnReceipt">Ver recibo</button>
+    </section>
+
+    <!-- 5. Recibo -->
+    <section class="screen" id="scrReceipt">
+      <div class="receipt" id="receipt"></div>
+      <button class="primary" id="btnPrint">Imprimir</button>
+      <button class="ghost" id="btnShare">Compartir</button>
+      <button class="ghost" id="btnVoid" style="color:var(--err)">Anular transacción</button>
+      <button class="ghost" id="btnBack">Volver</button>
+    </section>
+
+    <!-- 6. Historial -->
+    <section class="screen" id="scrHistory">
+      <h2>Ventas de hoy</h2>
+      <div class="totals">
+        <div><span>Total aprobado</span><b id="totAmount">$ 0</b></div>
+        <div><span>Transacciones</span><b id="totCount">0</b></div>
+      </div>
+      <div class="list" id="txList"></div>
+      <button class="ghost" id="btnClearHist">Borrar historial de este dispositivo</button>
+    </section>
+
+    <!-- 7. Ajustes -->
+    <section class="screen" id="scrSettings">
+      <h2>Ajustes</h2>
+      <button class="primary" id="btnConnect">Conectar lector</button>
+      <div class="note" id="readerInfo">Encienda el lector i9 y toque “Conectar lector”.</div>
+      <label class="field">Nombre del comercio <input id="setName" maxlength="30"></label>
+      <label class="field">NIT / identificación <input id="setNit" maxlength="20"></label>
+      <label class="field">Dirección <input id="setAddr" maxlength="40"></label>
+      <label class="field">URL del puente <input id="setBridge" inputmode="url"></label>
+      <label class="field">Terminal (DE41) <input id="setTid" maxlength="8" placeholder="Usa el del puente"></label>
+      <label class="field">Comercio (DE42) <input id="setMid" maxlength="15" placeholder="Usa el del puente"></label>
+      <label class="field">Parámetros EMV al lector (1F09)
+        <select id="setExtra">
+          <option value="5F2A0201709F1A020170">Colombia: COP 170 / país 170</option>
+          <option value="33">Valor de fábrica (33)</option>
+        </select></label>
+      <label class="check"><input type="checkbox" id="setDemo"> Modo demo: usar una tarjeta simulada (sin lector)</label>
+      <button class="ghost" id="btnTest">Probar conexión con el switch (eco)</button>
+      <div class="note" id="testInfo"></div>
+    </section>
+  </main>
+
+  <nav>
+    <button class="active" data-nav="scrAmount"><i>＄</i>Cobrar</button>
+    <button data-nav="scrHistory"><i>☰</i>Ventas</button>
+    <button data-nav="scrSettings"><i>⚙</i>Ajustes</button>
+  </nav>
+</div>
+<div class="toast" id="toast"></div>
+
+<script src="i9.js"></script>
+<script>
+'use strict';
+const $ = (s) => document.querySelector(s);
+const fmt = new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 });
+const money = (pesos) => fmt.format(pesos);
+const store = {
+  get(k, d) { try { const v = localStorage.getItem('pos.' + k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } },
+  set(k, v) { try { localStorage.setItem('pos.' + k, JSON.stringify(v)); } catch (e) {} },
+};
+function toast(t) { const el = $('#toast'); el.textContent = t; el.classList.add('show'); clearTimeout(toast.t); toast.t = setTimeout(() => el.classList.remove('show'), 2600); }
+
+// ---------- ajustes ----------
+const S = Object.assign({ name: 'Mi Comercio', nit: '', addr: '', bridge: 'http://localhost:8080', tid: '', mid: '', extra: '5F2A0201709F1A020170', demo: false }, store.get('settings', {}));
+function loadSettings() {
+  $('#setName').value = S.name; $('#setNit').value = S.nit; $('#setAddr').value = S.addr; $('#setBridge').value = S.bridge;
+  $('#setTid').value = S.tid; $('#setMid').value = S.mid; $('#setExtra').value = S.extra; $('#setDemo').checked = S.demo;
+  $('#hdrMerchant').textContent = S.name || 'Mi Comercio';
+  $('#demoBanner').style.display = S.demo ? 'block' : 'none';
+}
+['setName', 'setNit', 'setAddr', 'setBridge', 'setTid', 'setMid', 'setExtra', 'setDemo'].forEach((id) => $('#' + id).addEventListener('change', () => {
+  S.name = $('#setName').value.trim(); S.nit = $('#setNit').value.trim(); S.addr = $('#setAddr').value.trim();
+  S.bridge = $('#setBridge').value.trim().replace(/\/+$/, ''); S.tid = $('#setTid').value.trim(); S.mid = $('#setMid').value.trim();
+  S.extra = $('#setExtra').value; S.demo = $('#setDemo').checked;
+  store.set('settings', S); loadSettings(); updateReader();
+}));
+
+// ---------- navegación ----------
+function show(id) {
+  document.querySelectorAll('.screen').forEach((s) => s.classList.toggle('active', s.id === id));
+  document.querySelectorAll('nav button').forEach((b) => b.classList.toggle('active', b.dataset.nav === id));
+  if (id === 'scrHistory') renderHistory();
+}
+let busy = false;
+document.querySelectorAll('nav button').forEach((b) => b.onclick = () => { if (!busy) show(b.dataset.nav); });
+
+// ---------- lector ----------
+const reader = new I9Reader();
+function updateReader(extra) {
+  const on = reader.connected;
+  $('#readerDot').className = 'dot ' + (S.demo ? 'on' : on ? 'on' : 'off');
+  $('#readerTxt').textContent = S.demo ? 'Demo' : on ? (extra || 'Lector listo') : 'Sin lector';
+  $('#btnConnect').textContent = on ? 'Desconectar lector' : 'Conectar lector';
+}
+reader.addEventListener('disconnected', () => { updateReader(); toast('Lector desconectado'); });
+async function connectReader() {
+  try {
+    const name = await reader.connect();
+    let info = `Conectado a ${name}`;
+    try { const mv = await reader.battery(); info += ` · batería ${(mv / 1000).toFixed(2)} V${mv < 3500 ? ' (baja, cargue el lector)' : ''}`; } catch (e) {}
+    $('#readerInfo').textContent = info; updateReader(); toast('Lector conectado');
+  } catch (e) { if (!/cancel/i.test(e.message)) { $('#readerInfo').textContent = e.message; toast(e.message); } }
+}
+$('#btnConnect').onclick = () => reader.connected ? (reader.disconnect(), updateReader()) : connectReader();
+$('#readerPill').onclick = () => { if (!busy) { show('scrSettings'); if (!reader.connected && !S.demo) connectReader(); } };
+
+// ---------- teclado de monto ----------
+let digits = '';
+function renderAmount() {
+  const v = Number(digits || 0);
+  $('#amount').textContent = money(v);
+  $('#btnCharge').disabled = v <= 0;
+  $('#btnCharge').textContent = v > 0 ? 'Cobrar ' + money(v) : 'Cobrar';
+}
+$('#keypad').onclick = (e) => {
+  const k = e.target.closest('.key'); if (!k) return;
+  const t = k.textContent;
+  if (t === '⌫') digits = digits.slice(0, -1);
+  else if ((digits + t).replace(/^0+/, '').length <= 10) digits = (digits + t).replace(/^0+/, '');
+  renderAmount();
+};
+document.addEventListener('keydown', (e) => {
+  if (!$('#scrAmount').classList.contains('active') || document.activeElement === $('#desc')) return;
+  if (/^\d$/.test(e.key)) { digits = (digits + e.key).replace(/^0+/, '').slice(0, 10); renderAmount(); }
+  else if (e.key === 'Backspace') { digits = digits.slice(0, -1); renderAmount(); }
+  else if (e.key === 'Enter' && !$('#btnCharge').disabled) $('#btnCharge').click();
+});
+
+// ---------- puente / switch ----------
+async function bridgeCall(path, body) {
+  const r = await fetch(S.bridge + path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
+  const j = await r.json().catch(() => ({ error: 'Respuesta inválida del puente' }));
+  if (!r.ok || j.error) throw Object.assign(new Error(j.error || 'HTTP ' + r.status), { data: j });
+  return j;
+}
+$('#btnTest').onclick = async () => {
+  $('#testInfo').textContent = 'Probando…';
+  try { const j = await bridgeCall('/echo'); $('#testInfo').textContent = `Switch responde: ${j.response.mti} código ${j.response.fields[39]} en ${j.ms} ms`; }
+  catch (e) { $('#testInfo').textContent = e.message === 'Failed to fetch' ? `No se pudo contactar el puente en ${S.bridge}. ¿Está corriendo?` : 'Error: ' + e.message; }
+};
+
+// Tarjeta simulada para demos (PAN de prueba Visa, no es una tarjeta real)
+function demoCard(cents) {
+  const tl = (t, v) => t + (v.length / 2).toString(16).padStart(2, '0').toUpperCase() + v;
+  const d = new Date(), p = (n) => String(n).padStart(2, '0');
+  const rnd = (n) => Array.from(crypto.getRandomValues(new Uint8Array(n)), (b) => b.toString(16).padStart(2, '0')).join('').toUpperCase();
+  const amt = String(cents).padStart(12, '0');
+  const t2 = '4761739001010010D25122011143804400000F';
+  const f55 = [tl('9F26', rnd(8)), tl('9F27', '80'), tl('9F10', '06011203A02000'), tl('9F37', rnd(4)), tl('9F36', '0001'), tl('95', '0000000000'),
+    tl('9A', p(d.getFullYear() % 100) + p(d.getMonth() + 1) + p(d.getDate())), tl('9C', '00'), tl('9F02', amt), tl('5F2A', '0170'), tl('82', '2000'),
+    tl('9F1A', '0170'), tl('84', 'A0000000031010'), tl('5F34', '00'), tl('57', t2)].join('');
+  return { bridge: { cardType: '03020000', track2: t2, field55: f55, amountCents: cents }, last4: '0010', bin: '476173', brand: 'Visa', entry: 'Sin contacto', aid: 'A0000000031010', pin: false };
+}
+
+// ---------- flujo de cobro ----------
+const STATUS_TEXT = { chip_inserted: 'Tarjeta insertada, no la retire…', nfc_detected: 'Tarjeta detectada, mantenga cerca…', chip_failed: 'No se pudo leer el chip, intente de nuevo', nfc_failed: 'No se pudo leer, acerque de nuevo', remove_nfc: 'Retire la tarjeta', use_other: 'Use otro medio: inserte o deslice', present_card: 'Presente una sola tarjeta', use_nfc: 'Acerque la tarjeta' };
+reader.addEventListener('status', (e) => { const t = STATUS_TEXT[e.detail.name]; if (t) $('#waitSub').textContent = t; });
+
+let current = null, cancelled = false;
+$('#btnCharge').onclick = startSale;
+$('#btnCancel').onclick = async () => { cancelled = true; if (!S.demo) await reader.cancel(); busy = false; show('scrAmount'); toast('Cobro cancelado'); };
+
+async function startSale() {
+  const pesos = Number(digits || 0); if (pesos <= 0) return;
+  if (!S.demo && !reader.connected) { toast('Primero conecte el lector'); show('scrSettings'); return; }
+  const cents = pesos * 100;
+  cancelled = false; busy = true;
+  current = { id: Date.now().toString(36), pesos, desc: $('#desc').value.trim(), date: new Date().toISOString(), status: 'pending' };
+  $('#waitAmount').textContent = money(pesos);
+  $('#waitTitle').textContent = 'Acerque, inserte o deslice la tarjeta';
+  $('#waitSub').textContent = 'Esperando tarjeta…';
+  show('scrWait');
+
+  let card;
+  try {
+    if (S.demo) { await new Promise((r) => setTimeout(r, 1800)); card = demoCard(cents); }
+    else {
+      try { card = await reader.transaction({ cents, extra: S.extra }); }
+      catch (e) {
+        // Si el lector no acepta los parámetros de Colombia, reintenta con el valor de fábrica
+        if ((e.code === 0xF7 || e.code === 0xFC) && S.extra !== '33') { S.extra = '33'; store.set('settings', S); loadSettings(); toast('El lector no aceptó los parámetros de Colombia; se usó el valor de fábrica'); card = await reader.transaction({ cents, extra: '33' }); }
+        else throw e;
+      }
+    }
+  } catch (e) {
+    if (cancelled) return;
+    return finish({ approved: false, title: 'No se pudo leer la tarjeta', reason: e.message });
+  }
+  if (cancelled) return;
+  Object.assign(current, { brand: card.brand, last4: card.last4, entry: card.entry, aid: card.aid });
+
+  show('scrProc');
+  $('#procTitle').textContent = 'Procesando pago';
+  $('#procSub').textContent = `${card.brand} •••• ${card.last4} · Comunicando con el autorizador…`;
+  const body = { ...card.bridge };
+  if (S.tid) body.tid = S.tid; if (S.mid) body.mid = S.mid;
+  let j;
+  try { j = await bridgeCall('/purchase', body); }
+  catch (e) {
+    const d = e.data || {};
+    const reason = e.message === 'Failed to fetch' ? 'No hay conexión con el puente/switch' : e.message;
+    return finish({ approved: false, title: 'Pago no procesado', reason: reason + (d.reversal ? ' · se envió reverso automático' : ''), stan: d.stan });
+  }
+  const r = j.response, rc = r.fields[39];
+  let approved = ['000', '001', '003'].includes(rc);
+  Object.assign(current, { stan: j.stan, rrn: (r.fields[37] || '').trim(), auth: (r.fields[38] || '').trim(), rc, rcText: r.rcText });
+
+  // La tarjeta valida la respuesta del emisor (chip / sin contacto)
+  if (r.fields[55] && !S.demo && reader.connected) {
+    try {
+      const wb = await reader.writeBack(r.fields[55]);
+      if (approved && !wb.ok && card.entry === 'Chip') {
+        $('#procSub').textContent = 'La tarjeta rechazó la autorización. Reversando…';
+        await bridgeCall('/reversal', { stan: j.stan, rrn: current.rrn }).catch(() => {});
+        approved = false; current.rcText = 'Rechazada por la tarjeta (reversada)';
+      }
+    } catch (e) { /* sin contacto: la confirmación al chip es opcional */ }
+  }
+  finish({ approved, title: approved ? 'Pago aprobado' : 'Pago rechazado', reason: approved ? '' : `${r.rcText || 'Rechazada'} (código ${rc})` });
+}
+
+function finish({ approved, title, reason, stan }) {
+  busy = false;
+  current.status = approved ? 'approved' : 'declined';
+  current.reason = reason || '';
+  if (stan && !current.stan) current.stan = stan;
+  saveTx(current);
+  $('#resBadge').className = 'badge ' + (approved ? 'ok' : 'err');
+  $('#resBadge').textContent = approved ? '✓' : '✕';
+  $('#resTitle').textContent = title;
+  $('#resAmount').textContent = money(current.pesos);
+  $('#resCard').textContent = current.last4 ? `${current.brand} •••• ${current.last4} · ${current.entry}` : '';
+  const rows = approved
+    ? [['Autorización', current.auth || '—'], ['Referencia (RRN)', current.rrn || '—'], ['Recibo (STAN)', current.stan || '—']]
+    : [['Motivo', reason || '—']].concat(current.stan ? [['Recibo (STAN)', current.stan]] : []);
+  $('#resKv').innerHTML = rows.map(([k, v]) => `<div><span>${k}</span><span>${esc(v)}</span></div>`).join('');
+  $('#btnReceipt').style.display = approved ? '' : 'none';
+  show('scrResult');
+  digits = ''; $('#desc').value = ''; renderAmount();
+}
+$('#btnNew').onclick = () => show('scrAmount');
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+// ---------- historial (solo datos enmascarados) ----------
+const txs = () => store.get('txs', []);
+function saveTx(t) { const all = txs().filter((x) => x.id !== t.id); all.unshift(t); store.set('txs', all.slice(0, 200)); }
+function renderHistory() {
+  const today = new Date().toDateString();
+  const list = txs().filter((t) => new Date(t.date).toDateString() === today);
+  const ok = list.filter((t) => t.status === 'approved');
+  $('#totAmount').textContent = money(ok.reduce((s, t) => s + t.pesos, 0));
+  $('#totCount').textContent = ok.length;
+  $('#txList').innerHTML = list.length ? list.map((t) => {
+    const tag = t.status === 'approved' ? '<span class="tag ok">Aprobada</span>' : t.status === 'voided' ? '<span class="tag void">Anulada</span>' : '<span class="tag err">Rechazada</span>';
+    const time = new Date(t.date).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' });
+    return `<div class="tx" data-id="${t.id}"><div class="l"><div class="a">${money(t.pesos)}</div><div class="m">${time} · ${t.last4 ? esc(t.brand) + ' •••• ' + t.last4 : 'Sin tarjeta'}${t.desc ? ' · ' + esc(t.desc) : ''}</div></div>${tag}</div>`;
+  }).join('') : '<p class="sub" style="text-align:center;margin-top:30px">Aún no hay ventas hoy.</p>';
+}
+$('#txList').onclick = (e) => { const el = e.target.closest('.tx'); if (!el) return; const t = txs().find((x) => x.id === el.dataset.id); if (t && t.status !== 'declined') { current = t; openReceipt(); } };
+$('#btnClearHist').onclick = () => { if (confirm('¿Borrar el historial guardado en este dispositivo?')) { store.set('txs', []); renderHistory(); } };
+
+// ---------- recibo ----------
+function openReceipt() {
+  const t = current, d = new Date(t.date);
+  const voided = t.status === 'voided';
+  $('#receipt').innerHTML = `
+    <div class="c"><b>${esc(S.name || 'Mi Comercio')}</b>${S.nit ? '<br>NIT ' + esc(S.nit) : ''}${S.addr ? '<br>' + esc(S.addr) : ''}</div>
+    <hr>
+    <div class="c"><b>${voided ? 'ANULACIÓN' : 'COMPRA'}</b>${S.demo ? '<br>*** DEMO - SIN VALIDEZ ***' : ''}</div>
+    <div class="r"><span>Fecha</span><span>${d.toLocaleDateString('es-CO')} ${d.toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' })}</span></div>
+    ${S.tid ? `<div class="r"><span>Terminal</span><span>${esc(S.tid)}</span></div>` : ''}
+    <div class="r"><span>Tarjeta</span><span>${esc(t.brand || '')} **** ${esc(t.last4 || '')}</span></div>
+    <div class="r"><span>Modo</span><span>${esc(t.entry || '')}</span></div>
+    ${t.aid ? `<div class="r"><span>AID</span><span>${esc(t.aid)}</span></div>` : ''}
+    <div class="r"><span>Autorización</span><span>${esc(t.auth || '—')}</span></div>
+    <div class="r"><span>RRN</span><span>${esc(t.rrn || '—')}</span></div>
+    <div class="r"><span>Recibo</span><span>${esc(t.stan || '—')}</span></div>
+    ${t.desc ? `<div class="r"><span>Concepto</span><span>${esc(t.desc)}</span></div>` : ''}
+    <hr>
+    <div class="r tot"><span>TOTAL</span><span>${voided ? '-' : ''}${money(t.pesos)}</span></div>
+    <hr>
+    <div class="c">${voided ? 'Transacción anulada' : 'Aprobada'}<br>Gracias por su compra</div>`;
+  $('#btnVoid').style.display = t.status === 'approved' ? '' : 'none';
+  show('scrReceipt');
+}
+$('#btnReceipt').onclick = openReceipt;
+$('#btnBack').onclick = () => show('scrAmount');
+$('#btnPrint').onclick = () => window.print();
+$('#btnShare').onclick = async () => {
+  const text = $('#receipt').innerText.replace(/\n{2,}/g, '\n');
+  try { if (navigator.share) await navigator.share({ title: 'Recibo', text }); else { await navigator.clipboard.writeText(text); toast('Recibo copiado'); } } catch (e) {}
+};
+$('#btnVoid').onclick = async () => {
+  const t = current;
+  if (!confirm(`¿Anular la venta de ${money(t.pesos)}?`)) return;
+  busy = true; show('scrProc'); $('#procTitle').textContent = 'Anulando'; $('#procSub').textContent = 'Enviando reverso al autorizador…';
+  try {
+    const j = await bridgeCall('/reversal', { stan: t.stan, rrn: t.rrn });
+    busy = false;
+    if (j.response.fields[39] === '000') { t.status = 'voided'; saveTx(t); toast('Venta anulada'); openReceipt(); }
+    else { toast(`El autorizador no aceptó la anulación (código ${j.response.fields[39]})`); openReceipt(); }
+  } catch (e) { busy = false; toast(/original/i.test(e.message) ? 'Solo se pueden anular ventas hechas desde que se inició el puente' : 'Error: ' + e.message); openReceipt(); }
+};
+
+loadSettings(); renderAmount(); updateReader();
+</script>
+</body>
+</html>

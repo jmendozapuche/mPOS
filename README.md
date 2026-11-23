@@ -2,11 +2,22 @@
 
 Herramientas para usar el lector **i9** (Shenzhen HCC, "3 in 1 NFC card reader") en demostraciones contra un switch transaccional y un sistema de adquirencia de prueba.
 
+- `web/pos.html`: **pantalla de cobro para el comercio**. Tiene teclado de monto en pesos, cobro con el lector i9, resultado aprobado o rechazado, recibo (para imprimir o compartir), ventas del día y anulación. Incluye un modo demo con tarjeta simulada.
+- `web/i9.js`: librería del lector que usa `pos.html` (conexión BLE, transacción `02 A0`, confirmación al chip `02 A1`).
 - `web/i9-console.html`: consola Web Bluetooth. Se conecta al i9, muestra la información del terminal y la batería, inicia un cobro (banda, chip o NFC), interpreta la respuesta (TLV del lector y campo 55 EMV) y la copia como JSON.
 - `bridge/svfe-bridge.js`: puente HTTP → ISO 8583 para **SmartVista FE (POS Trickle Feed EMV, v1.89)**. Arma 0800 (eco), 0200 (compra) y 0400 (reverso, también automático si el switch no responde a tiempo), y trae un simulador SVFE (`--mock`). No tiene dependencias: solo necesita Node.js 18 o superior.
 - `docs/PROTOCOLO_I9.md`: resumen del protocolo del fabricante, con los UUID BLE, el formato de trama, los comandos y las llaves de depuración.
 
-## Uso rápido
+## Pantalla de cobro
+
+1. Inicie el puente (vea "Conectar con el switch SmartVista").
+2. Abra `https://<usuario>.github.io/mPOS/web/pos.html` en Chrome.
+3. En **Ajustes**: conecte el lector y escriba el nombre del comercio, el NIT, la URL del puente y el TID/MID. Pruebe el eco.
+4. En **Cobrar**: digite el monto, toque *Cobrar* y acerque, inserte o deslice la tarjeta.
+
+El historial guarda solo datos enmascarados (marca, últimos 4 dígitos, autorización, RRN), y solo en el navegador. Para anular se envía un 0400 con el STAN y el RRN de la venta; funciona mientras el puente siga corriendo desde que se hizo la venta.
+
+## Uso rápido (consola técnica)
 
 La consola necesita Chrome y un contexto seguro (HTTPS o `localhost`):
 
