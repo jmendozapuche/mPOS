@@ -191,7 +191,13 @@
       <label class="field">Nombre del comercio <input id="setName" maxlength="30"></label>
       <label class="field">NIT / identificación <input id="setNit" maxlength="20"></label>
       <label class="field">Dirección <input id="setAddr" maxlength="40"></label>
-      <label class="field">URL del puente <input id="setBridge" inputmode="url"></label>
+      <label class="field">Autorizador
+        <select id="setMode">
+          <option value="sim">Simulador integrado (sin computador)</option>
+          <option value="bridge">Switch real vía puente</option>
+        </select></label>
+      <label class="field" id="bridgeField">URL del puente <input id="setBridge" inputmode="url"></label>
+      <div class="note" id="simNote">El simulador aprueba todo, salvo los montos terminados en 51 (fondos insuficientes) y en 05 (no honrar). No se envía nada a ningún switch.</div>
       <label class="field">Terminal (DE41) <input id="setTid" maxlength="8" placeholder="Usa el del puente"></label>
       <label class="field">Comercio (DE42) <input id="setMid" maxlength="15" placeholder="Usa el del puente"></label>
       <label class="field">Parámetros EMV al lector (1F09)
@@ -226,17 +232,18 @@ const store = {
 function toast(t) { const el = $('#toast'); el.textContent = t; el.classList.add('show'); clearTimeout(toast.t); toast.t = setTimeout(() => el.classList.remove('show'), 2600); }
 
 // ---------- ajustes ----------
-const S = Object.assign({ name: 'Mi Comercio', nit: '', addr: '', bridge: 'http://localhost:8080', tid: '', mid: '', extra: '5F2A0201709F1A020170', demo: false }, store.get('settings', {}));
+const S = Object.assign({ name: 'Mi Comercio', nit: '', addr: '', mode: 'sim', bridge: 'http://localhost:8080', tid: '', mid: '', extra: '5F2A0201709F1A020170', demo: false }, store.get('settings', {}));
 function loadSettings() {
   $('#setName').value = S.name; $('#setNit').value = S.nit; $('#setAddr').value = S.addr; $('#setBridge').value = S.bridge;
-  $('#setTid').value = S.tid; $('#setMid').value = S.mid; $('#setExtra').value = S.extra; $('#setDemo').checked = S.demo;
+  $('#setTid').value = S.tid; $('#setMode').value = S.mode;
+  $('#bridgeField').style.display = S.mode === 'bridge' ? '' : 'none'; $('#simNote').style.display = S.mode === 'sim' ? '' : 'none'; $('#setMid').value = S.mid; $('#setExtra').value = S.extra; $('#setDemo').checked = S.demo;
   $('#hdrMerchant').textContent = S.name || 'Mi Comercio';
   $('#demoBanner').style.display = S.demo ? 'block' : 'none';
 }
-['setName', 'setNit', 'setAddr', 'setBridge', 'setTid', 'setMid', 'setExtra', 'setDemo'].forEach((id) => $('#' + id).addEventListener('change', () => {
+['setName', 'setNit', 'setAddr', 'setMode', 'setBridge', 'setTid', 'setMid', 'setExtra', 'setDemo'].forEach((id) => $('#' + id).addEventListener('change', () => {
   S.name = $('#setName').value.trim(); S.nit = $('#setNit').value.trim(); S.addr = $('#setAddr').value.trim();
   S.bridge = $('#setBridge').value.trim().replace(/\/+$/, ''); S.tid = $('#setTid').value.trim(); S.mid = $('#setMid').value.trim();
-  S.extra = $('#setExtra').value; S.demo = $('#setDemo').checked;
+  S.extra = $('#setExtra').value; S.demo = $('#setDemo').checked; S.mode = $('#setMode').value;
   store.set('settings', S); loadSettings(); updateReader();
 }));
 
@@ -253,6 +260,8 @@ document.querySelectorAll('nav button').forEach((b) => b.onclick = () => { if (!
 const reader = new I9Reader();
 function updateReader(extra) {
   const on = reader.connected;
+  $('#demoBanner').style.display = S.demo || S.mode === 'sim' ? 'block' : 'none';
+  $('#demoBanner').textContent = [S.demo && 'tarjeta simulada', S.mode === 'sim' && 'autorizador simulado'].filter(Boolean).join(' · ').replace(/^/, 'MODO DEMO · ');
   $('#readerDot').className = 'dot ' + (S.demo ? 'on' : on ? 'on' : 'off');
   $('#readerTxt').textContent = S.demo ? 'Demo' : on ? (extra || 'Lector listo') : 'Sin lector';
   $('#btnConnect').textContent = on ? 'Desconectar lector' : 'Conectar lector';
@@ -292,7 +301,33 @@ document.addEventListener('keydown', (e) => {
 });
 
 // ---------- puente / switch ----------
+// Simulador de autorizador dentro del navegador (mismas respuestas que el --mock del puente)
+const simTx = {};
+function simCall(path, body) {
+  const pad = (v, n) => String(v).padStart(n, '0').slice(-n);
+  const rrn = pad(Date.now() % 1e12, 12);
+  let stan = store.get('simStan', 0) % 999999 + 1; store.set('simStan', stan); stan = pad(stan, 6);
+  const ms = 300 + Math.floor(Math.random() * 500);
+  return new Promise((res, rej) => setTimeout(() => {
+    if (path === '/echo') return res({ ms, response: { mti: '0810', fields: { 39: '000', 37: rrn }, rcText: 'Aprobada' } });
+    if (path === '/purchase') {
+      const pesos = Math.round(body.amountCents / 100);
+      const rc = pesos % 100 === 51 ? '116' : pesos % 100 === 5 ? '100' : '000';
+      const f = { 4: pad(body.amountCents, 12), 11: stan, 37: rrn, 39: rc, 49: '170' };
+      if (rc === '000') f[38] = pad(Math.floor(Math.random() * 1e6), 6);
+      if (body.field55) f[55] = '8A02' + (rc === '000' ? '3030' : '3531'); // sin ARPC (91): la tarjeta decide
+      simTx[stan] = f;
+      return res({ ms, stan, warnings: [], response: { mti: '0210', fields: f, rcText: { '000': 'Aprobada', '116': 'Fondos insuficientes', '100': 'No honrar' }[rc] } });
+    }
+    if (path === '/reversal') {
+      if (!simTx[body.stan]) return rej(new Error('No se encontró la transacción original con STAN ' + body.stan));
+      return res({ ms, response: { mti: '0410', fields: { 11: body.stan, 37: body.rrn, 39: '000' }, rcText: 'Aprobada' } });
+    }
+    rej(new Error('Ruta no soportada'));
+  }, ms));
+}
 async function bridgeCall(path, body) {
+  if (S.mode === 'sim') return simCall(path, body || {});
   const r = await fetch(S.bridge + path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
   const j = await r.json().catch(() => ({ error: 'Respuesta inválida del puente' }));
   if (!r.ok || j.error) throw Object.assign(new Error(j.error || 'HTTP ' + r.status), { data: j });
@@ -300,7 +335,7 @@ async function bridgeCall(path, body) {
 }
 $('#btnTest').onclick = async () => {
   $('#testInfo').textContent = 'Probando…';
-  try { const j = await bridgeCall('/echo'); $('#testInfo').textContent = `Switch responde: ${j.response.mti} código ${j.response.fields[39]} en ${j.ms} ms`; }
+  try { const j = await bridgeCall('/echo'); $('#testInfo').textContent = `${S.mode === 'sim' ? 'Simulador' : 'Switch'} responde: ${j.response.mti} código ${j.response.fields[39]} en ${j.ms} ms`; }
   catch (e) { $('#testInfo').textContent = e.message === 'Failed to fetch' ? `No se pudo contactar el puente en ${S.bridge}. ¿Está corriendo?` : 'Error: ' + e.message; }
 };
 
@@ -431,7 +466,7 @@ function openReceipt() {
   $('#receipt').innerHTML = `
     <div class="c"><b>${esc(S.name || 'Mi Comercio')}</b>${S.nit ? '<br>NIT ' + esc(S.nit) : ''}${S.addr ? '<br>' + esc(S.addr) : ''}</div>
     <hr>
-    <div class="c"><b>${voided ? 'ANULACIÓN' : 'COMPRA'}</b>${S.demo ? '<br>*** DEMO - SIN VALIDEZ ***' : ''}</div>
+    <div class="c"><b>${voided ? 'ANULACIÓN' : 'COMPRA'}</b>${S.demo || S.mode === 'sim' ? '<br>*** DEMO - SIN VALIDEZ ***' : ''}</div>
     <div class="r"><span>Fecha</span><span>${d.toLocaleDateString('es-CO')} ${d.toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' })}</span></div>
     ${S.tid ? `<div class="r"><span>Terminal</span><span>${esc(S.tid)}</span></div>` : ''}
     <div class="r"><span>Tarjeta</span><span>${esc(t.brand || '')} **** ${esc(t.last4 || '')}</span></div>

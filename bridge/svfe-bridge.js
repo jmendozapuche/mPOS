@@ -311,7 +311,7 @@ function startMock() {
         const rc = cents % 100 === 51 ? '116' : '000'; // monto terminado en ,51 => fondos insuficientes
         mti = '0210'; f = { 3: q[3], 4: q[4], 7: q[7], 11: q[11], 12: q[12], 37: rrn, 39: rc, 41: q[41], 49: q[49] };
         if (rc === '000') f[38] = pad(Math.floor(Math.random() * 1e6), 6);
-        if (q[55]) f[55] = buildBer([{ tag: '8A', value: Buffer.from(rc === '000' ? '00' : '51') }, { tag: '91', value: unhex('0102030405060708' + '3030') }]);
+        if (q[55]) f[55] = buildBer([{ tag: '8A', value: Buffer.from(rc === '000' ? '00' : '51') }]); // sin ARPC (91): un 91 falso haría que un chip real rechace
       } else if (req.mti === '0400') { mti = '0410'; f = { 3: q[3], 4: q[4], 7: q[7], 11: q[11], 12: q[12], 37: q[37] || rrn, 39: '000', 41: q[41], 49: q[49] }; }
       else return sock.end();
       if (CFG.link) sock.write(Buffer.from([ACK]));

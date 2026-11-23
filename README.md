@@ -17,6 +17,23 @@ Herramientas para usar el lector **i9** (Shenzhen HCC, "3 in 1 NFC card reader")
 
 El historial guarda solo datos enmascarados (marca, últimos 4 dígitos, autorización, RRN), y solo en el navegador. Para anular se envía un 0400 con el STAN y el RRN de la venta; funciona mientras el puente siga corriendo desde que se hizo la venta.
 
+## Probar sin computador
+
+**Opción A: solo celular + lector (demo).** En `pos.html` → Ajustes → *Autorizador: Simulador integrado*. El autorizador corre en el mismo navegador: aprueba todo, salvo los montos terminados en 51 (DE39 116) y en 05 (DE39 100). Con *Modo demo* activado tampoco hace falta el lector.
+
+**Opción B: celular + lector + switch real (con Termux).** El puente corre en el mismo teléfono:
+1. Instale **Termux** desde F-Droid (la versión de Play Store está desactualizada).
+2. En Termux:
+   ```bash
+   pkg update && pkg install nodejs git
+   git clone https://github.com/<usuario>/mPOS && cd mPOS
+   termux-wake-lock          # evita que Android lo cierre en segundo plano
+   node bridge/svfe-bridge.js --switch IP:PUERTO --tid SU_TID --mid SU_MID
+   ```
+3. En `pos.html` → Ajustes → *Autorizador: Switch real vía puente*, con la URL `http://localhost:8080`.
+
+El teléfono debe alcanzar el switch (misma red o VPN en el celular).
+
 ## Uso rápido (consola técnica)
 
 La consola necesita Chrome y un contexto seguro (HTTPS o `localhost`):
